@@ -1,10 +1,11 @@
 // --- Routing ---
-const routes = { '/': overview, '/new': newTx, '/stats': stats, '/settings': settings, '/auth': auth };
+const routes = { '/': overview, '/new': newTx, '/stats': stats, '/search': search, '/settings': settings, '/auth': auth };
 function mount() { window.addEventListener('hashchange', render); render(); }
 function render() {
   const hash = location.hash.replace('#', '') || '/';
   const view = document.getElementById('view');
   (routes[hash] || notfound)(view);
+  updateActiveNav(hash);
 }
 
 // --- DB Layer (IndexedDB minimal) ---
@@ -68,6 +69,8 @@ async function logout(){ await tx(['meta'],'readwrite', async (t)=>{ await reqAs
 async function getInitialBalance(userId){ return tx(['ledger'],'readonly', async (t)=>{ const r = await reqAsync(t.objectStore('ledger').get(userId)); return r?.initialBalance ?? null; }); }
 async function setInitialBalance(userId, amount){ return tx(['ledger'],'readwrite', async (t)=>{ await reqAsync(t.objectStore('ledger').put({ userId, initialBalance: amount, createdAt: Date.now() })); }); }
 async function addTransaction(txn){ if(!txn.id) txn.id=uuid(); return tx(['transactions'],'readwrite', async (t)=>{ await reqAsync(t.objectStore('transactions').add(txn)); }); }
+async function updateTransaction(txn){ return tx(['transactions'],'readwrite', async (t)=>{ await reqAsync(t.objectStore('transactions').put(txn)); }); }
+async function removeTransaction(id){ return tx(['transactions'],'readwrite', async (t)=>{ await reqAsync(t.objectStore('transactions').delete(id)); }); }
 async function listTransactions(filter){ return tx(['transactions'],'readonly', async (t)=>{ let list = await getAll(t.objectStore('transactions')); if(filter?.userId) list=list.filter(x=>x.userId===filter.userId); if(filter?.range) list=list.filter(x=>x.date>=filter.range.start && x.date<=filter.range.end); if(filter?.type) list=list.filter(x=>x.type===filter.type); list.sort((a,b)=>a.date.localeCompare(b.date)); return list; }); }
 
 async function exportJson(userId, opts={ encrypted:false, password:'' }){
@@ -309,7 +312,7 @@ async function settings(root){
         <label class="muted">存储模式（占位）：
           <select id="storageMode">
             <option value="idb" selected>IndexedDB（默认）</option>
-            <option value="sqlite" disabled>文件账本（SQLite WASM，待集成）</option>
+            <option value="sqlite">文件账本（SQLite WASM）</option>
           </select>
         </label>
       </div>
@@ -330,8 +333,16 @@ async function settings(root){
       <div class="row">
         <button id="btnLogout" ${disabled}>登出</button>
       </div>
-      <p class="muted">说明：SQLite 文件账本需集成 WASM 引擎后启用；当前请使用 JSON 备份/迁移。</p>
+      <p class="muted" id="sqliteTip">说明：SQLite 需加载 sql.js 才能启用；未加载时请使用 JSON 备份/迁移。</p>
     </div>`;
+  // Disable SQLite mode if sql.js not present
+  const sqliteAvailable = typeof window.initSqlJs === 'function' || typeof window.SQL === 'object';
+  if (!sqliteAvailable){
+    const opt = root.querySelector('#storageMode option[value="sqlite"]');
+    if (opt) { opt.disabled = true; }
+    const tip = root.querySelector('#sqliteTip');
+    if (tip) tip.textContent = '说明：未检测到 sql.js（SQLite WASM），请参考 DocsIgnore/SQLite依赖与集成计划.md 安装后启用。';
+  }
   if (user){
     root.querySelector('#btnExport').addEventListener('click', async ()=>{
       const enc = root.querySelector('#encExport').checked;
@@ -359,14 +370,111 @@ function renderLine(el, series){
   const rect = el.getBoundingClientRect(); const w=Math.max(320, rect.width); const h=Math.max(160, rect.height);
   canvas.width = Math.floor(w*dpr); canvas.height = Math.floor(h*dpr);
   const ctx = canvas.getContext('2d'); ctx.scale(dpr, dpr); ctx.clearRect(0,0,w,h);
-  drawAxes(ctx, w, h); drawSeries(ctx, series.data, w, h);
+  const stats = calcSeriesStats(series.data);
+  drawAxesWithLabels(ctx, w, h, series.data, stats);
+  drawSeries(ctx, series.data, w, h, stats);
 }
-function drawAxes(ctx, w, h){ ctx.strokeStyle='rgba(255,255,255,.15)'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(40,h-30); ctx.lineTo(w-10,h-30); ctx.stroke(); ctx.beginPath(); ctx.moveTo(40,10); ctx.lineTo(40,h-30); ctx.stroke(); }
-function drawSeries(ctx, data, w, h){ if(!data.length) return; const vals=data.map(p=>p.y); const min=Math.min(...vals); const max=Math.max(...vals); const pad=(max-min)*.1||1; const ymin=min-pad; const ymax=max+pad; const L=40,R=w-10,T=10,B=h-30; const step=(R-L)/Math.max(1,data.length-1); const grad=ctx.createLinearGradient(0,T,0,B); grad.addColorStop(0,'rgba(138,180,255,0.5)'); grad.addColorStop(1,'rgba(138,180,255,0.05)'); ctx.fillStyle=grad; const pts=[]; data.forEach((p,i)=>{ const x=L+i*step; const y=B-((p.y-ymin)/(ymax-ymin))*(B-T); pts.push([x,y]);}); ctx.beginPath(); pts.forEach(([x,y],i)=>{ if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);}); ctx.strokeStyle='#8ab4ff'; ctx.lineWidth=2; ctx.stroke(); ctx.lineTo(R,B); ctx.lineTo(L,B); ctx.closePath(); ctx.globalAlpha=0.7; ctx.fill(); ctx.globalAlpha=1; }
+function calcSeriesStats(data){ if(!data.length) return { ymin:0, ymax:1 }; const vals=data.map(p=>p.y); const min=Math.min(...vals); const max=Math.max(...vals); const pad=(max-min)*.1||1; return { ymin: min-pad, ymax: max+pad }; }
+function drawAxesWithLabels(ctx, w, h, data, st){ const L=40,R=w-10,T=10,B=h-30; ctx.strokeStyle='rgba(255,255,255,.15)'; ctx.lineWidth=1; // axes
+  ctx.beginPath(); ctx.moveTo(L,B); ctx.lineTo(R,B); ctx.stroke(); ctx.beginPath(); ctx.moveTo(L,T); ctx.lineTo(L,B); ctx.stroke();
+  ctx.fillStyle='rgba(223,232,255,.85)'; ctx.font='12px system-ui, -apple-system, Segoe UI, Roboto, Arial'; ctx.textAlign='right'; ctx.textBaseline='middle';
+  const yticks = 4; for(let i=0;i<=yticks;i++){ const t=i/yticks; const y=B - t*(B-T); const v = st.ymin + t*(st.ymax-st.ymin); ctx.fillText(formatMoney(v), L-6, y); ctx.beginPath(); ctx.strokeStyle='rgba(255,255,255,.06)'; ctx.moveTo(L,y); ctx.lineTo(R,y); ctx.stroke(); }
+  // x labels: first, mid, last
+  ctx.textAlign='center'; ctx.textBaseline='top'; const n=data.length; if(n){ const xs=[0, Math.floor((n-1)/2), n-1]; const step=(R-L)/Math.max(1,n-1); xs.forEach((i,idx)=>{ const x=L + i*step; const label=String(data[i].x); ctx.fillStyle='rgba(223,232,255,.85)'; ctx.fillText(label, x, B+6); }); }
+}
+function drawSeries(ctx, data, w, h, st){ if(!data.length) return; const { ymin, ymax } = st; const L=40,R=w-10,T=10,B=h-30; const step=(R-L)/Math.max(1,data.length-1); const grad=ctx.createLinearGradient(0,T,0,B); grad.addColorStop(0,'rgba(138,180,255,0.5)'); grad.addColorStop(1,'rgba(138,180,255,0.05)'); ctx.fillStyle=grad; const pts=[]; data.forEach((p,i)=>{ const x=L+i*step; const y=B-((p.y-ymin)/(ymax-ymin))*(B-T); pts.push([x,y]);}); ctx.beginPath(); pts.forEach(([x,y],i)=>{ if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);}); ctx.strokeStyle='#8ab4ff'; ctx.lineWidth=2; ctx.stroke(); ctx.lineTo(R,B); ctx.lineTo(L,B); ctx.closePath(); ctx.globalAlpha=0.7; ctx.fill(); ctx.globalAlpha=1; }
 function lastMonthsRange(n){ const now=new Date(); const end=now.toISOString().slice(0,10); const startDate= new Date(now); startDate.setMonth(now.getMonth()-n+1); const start=startDate.toISOString().slice(0,10); return { start, end }; }
 function isoWeekKey(iso){ const d=new Date(iso+'T00:00:00Z'); const yStart=new Date(Date.UTC(d.getUTCFullYear(),0,1)); const day=(d.getUTCDay()+6)%7; const diff=(d.getTime()-yStart.getTime())/86400000+1; const week=Math.ceil((diff-day)/7); return `${d.getUTCFullYear()}-W${String(week).padStart(2,'0')}`; }
 function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c])); }
 function aggregate(items, kind, gran){ const sorted=[...items].sort((a,b)=>a.date.localeCompare(b.date)); const map=new Map(); for(const t of sorted){ const key = gran==='week'? isoWeekKey(t.date): t.date.slice(0,7); const delta = t.type==='income'? t.amount: -t.amount; if(kind==='income'&&t.type!=='income') continue; if(kind==='expense'&&t.type!=='expense') continue; const v = kind==='balance'? delta: Math.abs(delta); map.set(key,(map.get(key)||0)+v);} const out=[...map.entries()].sort((a,b)=>a[0].localeCompare(b[0])).map(([x,y])=>({x,y})); if(kind==='balance'){ let acc=0; for(const p of out){ acc+=p.y; p.y=acc; } } return out; }
+function formatMoney(v){ const abs=Math.abs(v); const sign=v<0?'-':''; if(abs>=1e8) return sign+(abs/1e8).toFixed(1)+'亿'; if(abs>=1e4) return sign+(abs/1e4).toFixed(1)+'万'; return sign+abs.toFixed(0); }
+
+// --- Search Page ---
+async function search(root){
+  const user = await getCurrentUser();
+  if (!user){ root.innerHTML = '<div class="card"><p>请先登录后进行搜索。</p></div>'; return; }
+  const today = new Date().toISOString().slice(0,10);
+  const start30 = (()=>{ const d=new Date(); d.setDate(d.getDate()-30); return d.toISOString().slice(0,10); })();
+  root.innerHTML = `
+    <div class="card">
+      <h2>搜索条目</h2>
+      <div class="row row-2">
+        <input id="kw" placeholder="关键词：备注或标签" />
+        <div class="row row-2">
+          <input id="start" type="date" value="${start30}" />
+          <input id="end" type="date" value="${today}" />
+        </div>
+      </div>
+      <div class="row"><button id="btnSearch">搜索</button></div>
+      <div id="result"></div>
+    </div>`;
+  root.querySelector('#btnSearch').addEventListener('click', runSearch);
+  await runSearch();
+
+  async function runSearch(){
+    const kw = root.querySelector('#kw').value.trim().toLowerCase();
+    const start = root.querySelector('#start').value || '0000-01-01';
+    const end = root.querySelector('#end').value || '9999-12-31';
+    let list = await listTransactions({ userId: user.id, range: { start, end } });
+    if (kw) list = list.filter(x => (x.note||'').toLowerCase().includes(kw) || (x.tags||[]).join(',').toLowerCase().includes(kw));
+    renderList(list);
+  }
+
+  function renderList(list){
+    const res = root.querySelector('#result');
+    if (!list.length){ res.innerHTML = '<p class="muted">未找到匹配记录</p>'; return; }
+    res.innerHTML = list.slice().reverse().map(item => rowHtml(item)).join('');
+    // bind events
+    list.forEach(item => bindRow(item));
+  }
+
+  function rowHtml(x){
+    const tagStr = (x.tags&&x.tags.length? ' · #'+x.tags.map(escapeHtml).join(' #'): '');
+    return `<div class="row" data-id="${x.id}" style="border-bottom:1px solid rgba(255,255,255,0.06); padding:10px 0;">
+      <div><b>${x.date}</b> · ${x.type==='income'?'+':'-'}${Number(x.amount).toFixed(2)} <span class="muted">${escapeHtml(x.note||'')}${tagStr}</span></div>
+      <div class="row row-2">
+        <div class="row">
+          <select class="edit-type"><option value="expense" ${x.type==='expense'?'selected':''}>支出</option><option value="income" ${x.type==='income'?'selected':''}>收入</option></select>
+          <input class="edit-amount" type="number" step="0.01" value="${x.amount}" />
+        </div>
+        <div class="row">
+          <input class="edit-date" type="date" value="${x.date}" />
+          <input class="edit-note" placeholder="备注" value="${escapeHtml(x.note||'')}" />
+          <input class="edit-tags" placeholder="标签,逗号分隔" value="${escapeHtml((x.tags||[]).join(','))}" />
+        </div>
+      </div>
+      <div class="row row-2">
+        <button class="btn-save">保存修改</button>
+        <button class="btn-del" style="background:#552a2a;border-color:#774040">删除</button>
+      </div>
+    </div>`;
+  }
+
+  function bindRow(x){
+    const row = root.querySelector(`[data-id="${x.id}"]`);
+    row.querySelector('.btn-save').addEventListener('click', async ()=>{
+      const updated = {
+        ...x,
+        type: row.querySelector('.edit-type').value,
+        amount: parseFloat(row.querySelector('.edit-amount').value),
+        date: row.querySelector('.edit-date').value,
+        note: row.querySelector('.edit-note').value,
+        tags: String(row.querySelector('.edit-tags').value||'').split(',').map(s=>s.trim()).filter(Boolean)
+      };
+      if (isNaN(updated.amount) || updated.amount<=0) return alert('金额无效');
+      await updateTransaction(updated);
+      alert('已保存');
+    });
+    row.querySelector('.btn-del').addEventListener('click', async ()=>{
+      if (!confirm('确定删除该条目？')) return;
+      await removeTransaction(x.id);
+      row.remove();
+    });
+  }
+}
+
+// --- Nav active state ---
+function updateActiveNav(hash){ const nav = document.getElementById('nav'); if(!nav) return; const route = hash || '/'; nav.querySelectorAll('a').forEach(a => { a.classList.toggle('active', a.getAttribute('data-route')===route); }); }
 
 // Handle iOS 100vh issue
 function setVH(){ const vh = window.innerHeight * 0.01; document.documentElement.style.setProperty('--vh', `${vh}px`); }

@@ -9,13 +9,14 @@
   </head>
   <body>
     <div id="app" class="page">
-      <aside class="sidebar">
-        <h1>🐷 猪猪记账</h1>
-        <nav>
-          <a href="#/">总览</a>
-          <a href="#/new">记一笔</a>
-          <a href="#/stats">统计</a>
-          <a href="#/settings">设置</a>
+      <aside class="sidebar" id="sidebar">
+        <h1 class="brand">🐷 猪猪记账</h1>
+        <nav id="nav">
+          <a href="#/" data-route="/">总览</a>
+          <a href="#/new" data-route="/new">记一笔</a>
+          <a href="#/stats" data-route="/stats">统计</a>
+          <a href="#/search" data-route="/search">搜索</a>
+          <a href="#/settings" data-route="/settings">设置</a>
         </nav>
       </aside>
       <main class="main">
