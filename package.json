@@ -1,0 +1,13 @@
+{
+  "name": "piggy-money",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PiggyMoney - TS + IndexedDB/SQLite/JSON local-first bookkeeping app",
+  "scripts": {
+    "dev": "node scripts/dev-server.js",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "type": "module"
+}
+

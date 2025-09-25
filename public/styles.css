@@ -1,0 +1,22 @@
+:root { --space: 12px; --radius: 16px; --bg: #0b0f1c; --fg: #eef3fb; --panel: #121a33; --panel-soft: #0f1630; --accent: #7fa5ff; --accent-weak: #a8beff; --border: #2a376a; --shadow: 0 10px 30px rgba(10,20,50,0.35); }
+@media (min-width: 1024px){ :root { --space: 16px; --radius: 20px; }}
+html { font-size: clamp(14px, 1.7vw, 18px); color-scheme: dark; }
+body { margin: 0; background: radial-gradient(1200px 800px at 20% -10%, #121a33 0%, #0b0f1c 60%) fixed; color: var(--fg); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+.page { display: grid; grid-template-columns: 1fr; min-height: 100vh; }
+@media (min-width: 768px){ .page { grid-template-columns: 250px 1fr; }}
+.sidebar { background: linear-gradient(180deg, var(--panel) 0%, var(--panel-soft) 100%); padding: calc(var(--space)*2) var(--space); box-shadow: var(--shadow); border-right: 1px solid rgba(255,255,255,0.05); }
+.sidebar h1 { font-size: 1.25rem; margin: 0 0 var(--space) 0; letter-spacing: 0.3px; }
+nav { display: grid; gap: 8px; }
+nav a { color: var(--accent); text-decoration: none; padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); transition: background .2s, transform .05s; }
+nav a:hover { background: rgba(255,255,255,0.06); }
+nav a:active { transform: translateY(1px); }
+.main { padding: var(--space); }
+.card { background: linear-gradient(180deg, var(--panel) 0%, var(--panel-soft) 100%); border-radius: var(--radius); padding: calc(var(--space)*1.25); box-shadow: var(--shadow); border: 1px solid rgba(255,255,255,0.06); }
+button, input, select { background: #1b2448; color: var(--fg); border: 1px solid var(--border); border-radius: 14px; min-height: 44px; padding: 0 14px; box-shadow: inset 0 1px 0 rgba(255,255,255,0.05); }
+button { cursor: pointer; background: linear-gradient(180deg, #24315f, #1b2448); }
+button:hover { filter: brightness(1.05); }
+.row { display: grid; gap: 10px; }
+@media (min-width: 768px){ .row-2 { grid-template-columns: 1fr 1fr; } }
+.chart { height: 260px; border-radius: 12px; overflow: hidden; border: 1px solid rgba(255,255,255,0.06); }
+.muted { color: #a7b0c9; font-size: .95em; }
+

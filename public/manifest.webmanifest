@@ -1,0 +1,10 @@
+{
+  "name": "猪猪记账 PiggyMoney",
+  "short_name": "Piggy",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b0f1c",
+  "theme_color": "#121a33",
+  "icons": []
+}
+
