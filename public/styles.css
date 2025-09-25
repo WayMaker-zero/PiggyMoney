@@ -16,10 +16,29 @@ nav a.active { background: rgba(127,165,255,0.18); border-color: rgba(127,165,25
 button, input, select { background: #1b2448; color: var(--fg); border: 1px solid var(--border); border-radius: 14px; min-height: 44px; padding: 0 14px; box-shadow: inset 0 1px 0 rgba(255,255,255,0.05); }
 button { cursor: pointer; background: linear-gradient(180deg, #24315f, #1b2448); }
 button:hover { filter: brightness(1.05); }
+.btn { background: linear-gradient(180deg, #24315f, #1b2448); border: 1px solid var(--border); color: var(--fg); border-radius: 12px; padding: 10px 14px; min-height: 40px; }
+.btn-primary { background: linear-gradient(180deg, #3a60ff, #2b46b9); border-color: #3a60ff; }
+.btn-outline { background: transparent; border: 1px solid rgba(255,255,255,0.18); }
+.btn-danger { background: linear-gradient(180deg, #7a2c2c, #5a2323); border-color: #a34a4a; }
 .row { display: grid; gap: 10px; }
 @media (min-width: 768px){ .row-2 { grid-template-columns: 1fr 1fr; } }
 .chart { height: 260px; border-radius: 12px; overflow: hidden; border: 1px solid rgba(255,255,255,0.06); }
 .muted { color: #a7b0c9; font-size: .95em; }
+
+/* Toolbar & chips */
+.toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.toolbar .tool { display: flex; gap: 8px; align-items: center; }
+.chip { display: inline-block; padding: 2px 8px; border-radius: 999px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12); font-size: 12px; color: #cfd7f3; }
+
+/* Entry list styling */
+.entries { display: grid; gap: 8px; }
+.entry { display: grid; grid-template-columns: 1fr auto; gap: 6px; padding: 10px 12px; border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; background: rgba(255,255,255,0.03); }
+.entry .entry-amount { font-weight: 700; }
+.entry .entry-amount.income { color: #6fdc8c; }
+.entry .entry-amount.expense { color: #ff7f7f; }
+.entry .entry-meta { color: #bac3df; font-size: 12px; }
+.entry .entry-actions { display: flex; gap: 8px; align-items: center; }
+
 
 /* Mobile bottom tab bar */
 @media (max-width: 767px){

@@ -10,7 +10,8 @@ function render() {
 
 // --- DB Layer (IndexedDB minimal) ---
 const DB_NAME = 'piggy-money';
-const DB_VERSION = 1;
+const DB_VERSION = 2; // add 'sqlite' store for sql.js persistence
+const STORE = { mode: localStorage.getItem('storageMode') || 'idb' };
 function openDB(){
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
@@ -24,6 +25,7 @@ function openDB(){
         s.createIndex('userId_date', ['userId','date'], { unique: false });
       }
       if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta', { keyPath: 'key' });
+      if (!db.objectStoreNames.contains('sqlite')) db.createObjectStore('sqlite', { keyPath: 'key' });
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -41,14 +43,77 @@ const reqAsync = (req) => new Promise((res, rej)=>{ req.onsuccess=()=>res(req.re
 const getAll = (store) => 'getAll' in store ? reqAsync(store.getAll()) : new Promise((res, rej)=>{ const out=[]; const c=store.openCursor(); c.onsuccess=()=>{ const cur=c.result; if(!cur) return res(out); out.push(cur.value); cur.continue();}; c.onerror=()=>rej(c.error);});
 const uuid = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random()*16|0; const v = c==='x'?r:(r&0x3)|0x8; return v.toString(16); });
 
-async function getCurrentUser(){
+// --- SQLite (sql.js) backend helpers ---
+let SQL = null; // sql.js module
+let sqliteDb = null; // SQL.Database instance
+let sqliteSaveTimer = null;
+async function ensureSqlite(){
+  if (!SQL){
+    if (window.initSqlJs) {
+      SQL = await window.initSqlJs({ locateFile: f => '/vendor/sqljs/' + f });
+    } else if (window.SQL){
+      SQL = window.SQL;
+    } else {
+      throw new Error('未检测到 sql.js');
+    }
+  }
+  if (!sqliteDb){
+    const bytes = await loadSqliteBytes();
+    sqliteDb = bytes ? new SQL.Database(bytes) : new SQL.Database();
+    // schema
+    sqliteDb.run(`CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, username TEXT, createdAt INTEGER);
+                  CREATE TABLE IF NOT EXISTS ledger(userId TEXT PRIMARY KEY, initialBalance REAL, createdAt INTEGER);
+                  CREATE TABLE IF NOT EXISTS transactions(id TEXT PRIMARY KEY, userId TEXT, amount REAL, type TEXT, date TEXT, note TEXT, tags TEXT);
+                  CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);`);
+    if (!bytes) await saveSqlite();
+  }
+}
+function scheduleSqliteSave(){ clearTimeout(sqliteSaveTimer); sqliteSaveTimer = setTimeout(saveSqlite, 400); }
+async function saveSqlite(){ const bytes = sqliteDb.export(); await tx(['sqlite'],'readwrite', async (t)=>{ await reqAsync(t.objectStore('sqlite').put({ key:'db', value: bytes })); }); }
+async function loadSqliteBytes(){ return tx(['sqlite'],'readonly', async (t)=>{ const r = await reqAsync(t.objectStore('sqlite').get('db')); return r?.value || null; }); }
+function sqlite_all(sql, params=[]){ const stmt = sqliteDb.prepare(sql); stmt.bind(params); const rows=[]; while(stmt.step()){ rows.push(stmt.getAsObject()); } stmt.free(); return rows; }
+function sqlite_get(sql, params=[]){ const rows = sqlite_all(sql, params); return rows[0] || null; }
+function sqlite_run(sql, params=[]){ sqliteDb.run(sql, params); scheduleSqliteSave(); }
+function meta_get(key){ const r = sqlite_get('SELECT value FROM meta WHERE key=?',[key]); return r? r.value: null; }
+function meta_set(key, value){ sqlite_run('INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', [key, value]); }
+
+// Attempt to dynamically load sql.js if not present
+async function tryLoadSqlJs(){
+  if (window.initSqlJs || window.SQL) return true;
+  // Try to load from default path
+  const src = '/vendor/sqljs/sql-wasm.js';
+  try {
+    await new Promise((resolve, reject)=>{
+      const s = document.createElement('script');
+      s.src = src; s.onload = resolve; s.onerror = reject; document.head.appendChild(s);
+    });
+    // allow global to settle
+    await new Promise(r=>setTimeout(r, 50));
+    return !!(window.initSqlJs || window.SQL);
+  } catch { return false; }
+}
+
+// Facade: dispatch by storage mode
+async function getCurrentUser(){ return STORE.mode==='sqlite' ? sqlite_getCurrentUser() : idb_getCurrentUser(); }
+async function register(username){ return STORE.mode==='sqlite' ? sqlite_register(username) : idb_register(username); }
+async function login(username){ return STORE.mode==='sqlite' ? sqlite_login(username) : idb_login(username); }
+async function logout(){ return STORE.mode==='sqlite' ? sqlite_logout() : idb_logout(); }
+async function getInitialBalance(userId){ return STORE.mode==='sqlite' ? sqlite_getInitialBalance(userId) : idb_getInitialBalance(userId); }
+async function setInitialBalance(userId, amount){ return STORE.mode==='sqlite' ? sqlite_setInitialBalance(userId, amount) : idb_setInitialBalance(userId, amount); }
+async function addTransaction(txn){ return STORE.mode==='sqlite' ? sqlite_addTransaction(txn) : idb_addTransaction(txn); }
+async function updateTransaction(txn){ return STORE.mode==='sqlite' ? sqlite_updateTransaction(txn) : idb_updateTransaction(txn); }
+async function removeTransaction(id){ return STORE.mode==='sqlite' ? sqlite_removeTransaction(id) : idb_removeTransaction(id); }
+async function listTransactions(filter){ return STORE.mode==='sqlite' ? sqlite_listTransactions(filter) : idb_listTransactions(filter); }
+
+// --- IDB backend ---
+async function idb_getCurrentUser(){
   return tx(['meta','users'], 'readonly', async (t)=>{
     const id = await reqAsync(t.objectStore('meta').get('currentUserId')).then(r=>r?.value);
     if (!id) return null;
     return await reqAsync(t.objectStore('users').get(id));
   });
 }
-async function register(username){
+async function idb_register(username){
   const user = { id: uuid(), username, createdAt: Date.now() };
   await tx(['users','meta'], 'readwrite', async (t)=>{
     await reqAsync(t.objectStore('users').add(user));
@@ -56,7 +121,7 @@ async function register(username){
   });
   return user;
 }
-async function login(username){
+async function idb_login(username){
   return tx(['users','meta'], 'readwrite', async (t)=>{
     const all = await getAll(t.objectStore('users'));
     const found = all.find(u=>u.username===username);
@@ -65,13 +130,52 @@ async function login(username){
     return found;
   });
 }
-async function logout(){ await tx(['meta'],'readwrite', async (t)=>{ await reqAsync(t.objectStore('meta').delete('currentUserId')); }); }
-async function getInitialBalance(userId){ return tx(['ledger'],'readonly', async (t)=>{ const r = await reqAsync(t.objectStore('ledger').get(userId)); return r?.initialBalance ?? null; }); }
-async function setInitialBalance(userId, amount){ return tx(['ledger'],'readwrite', async (t)=>{ await reqAsync(t.objectStore('ledger').put({ userId, initialBalance: amount, createdAt: Date.now() })); }); }
-async function addTransaction(txn){ if(!txn.id) txn.id=uuid(); return tx(['transactions'],'readwrite', async (t)=>{ await reqAsync(t.objectStore('transactions').add(txn)); }); }
-async function updateTransaction(txn){ return tx(['transactions'],'readwrite', async (t)=>{ await reqAsync(t.objectStore('transactions').put(txn)); }); }
-async function removeTransaction(id){ return tx(['transactions'],'readwrite', async (t)=>{ await reqAsync(t.objectStore('transactions').delete(id)); }); }
-async function listTransactions(filter){ return tx(['transactions'],'readonly', async (t)=>{ let list = await getAll(t.objectStore('transactions')); if(filter?.userId) list=list.filter(x=>x.userId===filter.userId); if(filter?.range) list=list.filter(x=>x.date>=filter.range.start && x.date<=filter.range.end); if(filter?.type) list=list.filter(x=>x.type===filter.type); list.sort((a,b)=>a.date.localeCompare(b.date)); return list; }); }
+async function idb_logout(){ await tx(['meta'],'readwrite', async (t)=>{ await reqAsync(t.objectStore('meta').delete('currentUserId')); }); }
+async function idb_getInitialBalance(userId){ return tx(['ledger'],'readonly', async (t)=>{ const r = await reqAsync(t.objectStore('ledger').get(userId)); return r?.initialBalance ?? null; }); }
+async function idb_setInitialBalance(userId, amount){ return tx(['ledger'],'readwrite', async (t)=>{ await reqAsync(t.objectStore('ledger').put({ userId, initialBalance: amount, createdAt: Date.now() })); }); }
+async function idb_addTransaction(txn){ if(!txn.id) txn.id=uuid(); return tx(['transactions'],'readwrite', async (t)=>{ await reqAsync(t.objectStore('transactions').add(txn)); }); }
+async function idb_updateTransaction(txn){ return tx(['transactions'],'readwrite', async (t)=>{ await reqAsync(t.objectStore('transactions').put(txn)); }); }
+async function idb_removeTransaction(id){ return tx(['transactions'],'readwrite', async (t)=>{ await reqAsync(t.objectStore('transactions').delete(id)); }); }
+async function idb_listTransactions(filter){ return tx(['transactions'],'readonly', async (t)=>{ let list = await getAll(t.objectStore('transactions')); if(filter?.userId) list=list.filter(x=>x.userId===filter.userId); if(filter?.range) list=list.filter(x=>x.date>=filter.range.start && x.date<=filter.range.end); if(filter?.type) list=list.filter(x=>x.type===filter.type); list.sort((a,b)=>a.date.localeCompare(b.date)); return list; }); }
+
+// --- SQLite (sql.js) backend ---
+async function sqlite_getCurrentUser(){
+  await ensureSqlite();
+  const id = meta_get('currentUserId');
+  if (!id) return null;
+  const row = sqlite_get('SELECT id, username, createdAt FROM users WHERE id=?',[id]);
+  return row ? { id: row.id, username: row.username, createdAt: Number(row.createdAt) } : null;
+}
+async function sqlite_register(username){
+  await ensureSqlite();
+  const user = { id: uuid(), username, createdAt: Date.now() };
+  sqlite_run('INSERT INTO users(id, username, createdAt) VALUES(?,?,?)', [user.id, user.username, user.createdAt]);
+  meta_set('currentUserId', user.id);
+  return user;
+}
+async function sqlite_login(username){
+  await ensureSqlite();
+  const row = sqlite_get('SELECT id, username, createdAt FROM users WHERE username=?', [username]);
+  if (!row) throw new Error('用户不存在');
+  meta_set('currentUserId', row.id);
+  return { id: row.id, username: row.username, createdAt: Number(row.createdAt) };
+}
+async function sqlite_logout(){ await ensureSqlite(); sqlite_run('DELETE FROM meta WHERE key=?',[ 'currentUserId' ]); }
+async function sqlite_getInitialBalance(userId){ await ensureSqlite(); const r = sqlite_get('SELECT initialBalance FROM ledger WHERE userId=?',[userId]); return r? Number(r.initialBalance) : null; }
+async function sqlite_setInitialBalance(userId, amount){ await ensureSqlite(); sqlite_run('INSERT INTO ledger(userId, initialBalance, createdAt) VALUES(?,?,?) ON CONFLICT(userId) DO UPDATE SET initialBalance=excluded.initialBalance, createdAt=excluded.createdAt', [userId, amount, Date.now()]); }
+async function sqlite_addTransaction(txn){ await ensureSqlite(); if(!txn.id) txn.id = uuid(); sqlite_run('INSERT INTO transactions(id,userId,amount,type,date,note,tags) VALUES(?,?,?,?,?,?,?)',[txn.id, txn.userId, txn.amount, txn.type, txn.date, txn.note||'', (txn.tags||[]).join(',')]); }
+async function sqlite_updateTransaction(txn){ await ensureSqlite(); sqlite_run('UPDATE transactions SET userId=?, amount=?, type=?, date=?, note=?, tags=? WHERE id=?',[txn.userId, txn.amount, txn.type, txn.date, txn.note||'', (txn.tags||[]).join(','), txn.id]); }
+async function sqlite_removeTransaction(id){ await ensureSqlite(); sqlite_run('DELETE FROM transactions WHERE id=?',[id]); }
+async function sqlite_listTransactions(filter){
+  await ensureSqlite();
+  const cond = []; const args = [];
+  if (filter?.userId) { cond.push('userId=?'); args.push(filter.userId); }
+  if (filter?.range) { cond.push('date>=?'); cond.push('date<=?'); args.push(filter.range.start, filter.range.end); }
+  if (filter?.type) { cond.push('type=?'); args.push(filter.type); }
+  const where = cond.length ? ('WHERE ' + cond.join(' AND ')) : '';
+  const rows = sqlite_all(`SELECT id,userId,amount,type,date,note,tags FROM transactions ${where} ORDER BY date ASC`, args);
+  return rows.map(r => ({ id: r.id, userId: r.userId, amount: Number(r.amount), type: r.type, date: r.date, note: r.note || '', tags: String(r.tags||'').split(',').filter(Boolean) }));
+}
 
 async function exportJson(userId, opts={ encrypted:false, password:'' }){
   const [users, ledger, transactions, meta] = await tx(['users','ledger','transactions','meta'],'readonly', async (t)=>{
@@ -317,31 +421,79 @@ async function settings(root){
         </label>
       </div>
       <h3>备份与迁移</h3>
-      <div class="row row-2">
-        <div class="row">
-          <label><input type="checkbox" id="encExport"> 使用口令加密导出</label>
+      <div class="toolbar">
+        <div class="tool">
+          <label class="muted"><input type="checkbox" id="encExport"> 导出加密</label>
           <input id="exportPwd" placeholder="导出口令（可选）" type="password" />
-          <button id="btnExport" ${disabled}>导出</button>
+          <button class="btn btn-primary" id="btnExport" ${disabled}>导出 JSON</button>
         </div>
-        <div class="row">
+        <div class="tool">
           <input id="importFile" type="file" accept=".json,.pmj" />
           <select id="strategy"><option value="overwrite">覆盖导入</option><option value="merge">合并导入</option></select>
           <input id="importPwd" placeholder="导入口令（如为加密文件）" type="password" />
-          <button id="btnImport">导入</button>
+          <button class="btn" id="btnImport">导入 JSON</button>
         </div>
       </div>
-      <div class="row">
-        <button id="btnLogout" ${disabled}>登出</button>
+      <div class="row" id="sqliteOps" style="display:none">
+        <div class="toolbar">
+          <button class="btn btn-primary" id="btnExportSqlite">导出 SQLite</button>
+          <div class="tool">
+            <input id="importSqliteFile" type="file" accept=".sqlite" />
+            <button class="btn" id="btnImportSqlite">导入 SQLite</button>
+          </div>
+        </div>
       </div>
+      <div class="row"><button id="btnLogout" ${disabled}>登出</button></div>
       <p class="muted" id="sqliteTip">说明：SQLite 需加载 sql.js 才能启用；未加载时请使用 JSON 备份/迁移。</p>
     </div>`;
-  // Disable SQLite mode if sql.js not present
-  const sqliteAvailable = typeof window.initSqlJs === 'function' || typeof window.SQL === 'object';
+  // Detect or try to load sql.js if missing
+  const sqliteAvailable = (typeof window.initSqlJs === 'function' || typeof window.SQL === 'object') || await tryLoadSqlJs();
   if (!sqliteAvailable){
     const opt = root.querySelector('#storageMode option[value="sqlite"]');
     if (opt) { opt.disabled = true; }
     const tip = root.querySelector('#sqliteTip');
     if (tip) tip.textContent = '说明：未检测到 sql.js（SQLite WASM），请参考 DocsIgnore/SQLite依赖与集成计划.md 安装后启用。';
+  }
+  if (sqliteAvailable){
+    const tip = root.querySelector('#sqliteTip');
+    if (tip) tip.textContent = '已检测到 sql.js，可以使用 SQLite 进行备份与恢复。';
+  }
+  // reflect current mode
+  const modeSel = root.querySelector('#storageMode');
+  if (modeSel) {
+    modeSel.value = STORE.mode;
+    modeSel.addEventListener('change', (e)=>{
+      const val = e.target.value;
+      localStorage.setItem('storageMode', val);
+      alert('已切换存储模式为：' + val + '\n将重新加载页面以生效。');
+      location.reload();
+    });
+  }
+  // SQLite export/import when available
+  if (sqliteAvailable){
+    root.querySelector('#sqliteOps').style.display = '';
+    root.querySelector('#btnExportSqlite').addEventListener('click', async ()=>{
+      try {
+        await ensureSqlite();
+        const bytes = sqliteDb.export();
+        const blob = new Blob([bytes], { type: 'application/octet-stream' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'PiggyMoney.sqlite';
+        a.click(); URL.revokeObjectURL(a.href);
+      } catch(err){ alert(err.message || '导出失败'); }
+    });
+    root.querySelector('#btnImportSqlite').addEventListener('click', async ()=>{
+      const f = root.querySelector('#importSqliteFile').files[0];
+      if (!f) return alert('请选择 .sqlite 文件');
+      try {
+        await ensureSqlite();
+        const bytes = new Uint8Array(await f.arrayBuffer());
+        sqliteDb = new SQL.Database(bytes); // replace
+        await saveSqlite();
+        alert('导入成功');
+      } catch(err){ alert(err.message || '导入失败'); }
+    });
   }
   if (user){
     root.querySelector('#btnExport').addEventListener('click', async ()=>{
@@ -423,31 +575,14 @@ async function search(root){
   function renderList(list){
     const res = root.querySelector('#result');
     if (!list.length){ res.innerHTML = '<p class="muted">未找到匹配记录</p>'; return; }
-    res.innerHTML = list.slice().reverse().map(item => rowHtml(item)).join('');
+    res.innerHTML = `<div class="entries">` + list.slice().reverse().map(item => rowHtml(item)).join('') + `</div>`;
     // bind events
     list.forEach(item => bindRow(item));
   }
 
   function rowHtml(x){
-    const tagStr = (x.tags&&x.tags.length? ' · #'+x.tags.map(escapeHtml).join(' #'): '');
-    return `<div class="row" data-id="${x.id}" style="border-bottom:1px solid rgba(255,255,255,0.06); padding:10px 0;">
-      <div><b>${x.date}</b> · ${x.type==='income'?'+':'-'}${Number(x.amount).toFixed(2)} <span class="muted">${escapeHtml(x.note||'')}${tagStr}</span></div>
-      <div class="row row-2">
-        <div class="row">
-          <select class="edit-type"><option value="expense" ${x.type==='expense'?'selected':''}>支出</option><option value="income" ${x.type==='income'?'selected':''}>收入</option></select>
-          <input class="edit-amount" type="number" step="0.01" value="${x.amount}" />
-        </div>
-        <div class="row">
-          <input class="edit-date" type="date" value="${x.date}" />
-          <input class="edit-note" placeholder="备注" value="${escapeHtml(x.note||'')}" />
-          <input class="edit-tags" placeholder="标签,逗号分隔" value="${escapeHtml((x.tags||[]).join(','))}" />
-        </div>
-      </div>
-      <div class="row row-2">
-        <button class="btn-save">保存修改</button>
-        <button class="btn-del" style="background:#552a2a;border-color:#774040">删除</button>
-      </div>
-    </div>`;
+    const chips = (x.tags||[]).map(t=>`<span class=\"chip\">#${escapeHtml(t)}<\/span>`).join(' ');
+    return `<div class=\"entry\" data-id=\"${x.id}\">\n      <div>\n        <div class=\"entry-amount ${x.type==='income'?'income':'expense'}\">${x.type==='income'?'+':'-'}${Number(x.amount).toFixed(2)}</div>\n        <div class=\"entry-meta\">${x.date} · ${escapeHtml(x.note||'')} ${chips}</div>\n      </div>\n      <div class=\"entry-actions\">\n        <button class=\"btn btn-outline btn-save\">保存</button>\n        <button class=\"btn btn-danger btn-del\">删除</button>\n      </div>\n      <div class=\"row row-2\" style=\"margin-top:8px\">\n        <div class=\"row\">\n          <select class=\"edit-type\"><option value=\"expense\" ${x.type==='expense'?'selected':''}>支出</option><option value=\"income\" ${x.type==='income'?'selected':''}>收入</option></select>\n          <input class=\"edit-amount\" type=\"number\" step=\"0.01\" value=\"${x.amount}\" />\n        </div>\n        <div class=\"row\">\n          <input class=\"edit-date\" type=\"date\" value=\"${x.date}\" />\n          <input class=\"edit-note\" placeholder=\"备注\" value=\"${escapeHtml(x.note||'')}\" />\n          <input class=\"edit-tags\" placeholder=\"标签,逗号分隔\" value=\"${escapeHtml((x.tags||[]).join(','))}\" />\n        </div>\n      </div>\n    </div>`;
   }
 
   function bindRow(x){
