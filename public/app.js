@@ -172,13 +172,13 @@ async function overview(root){
   const user = await getCurrentUser();
   const ui = [];
   ui.push('<div class="card">');
-  ui.push('<h2>用户</h2>');
+  ui.push('<h2>账本</h2>');
   if (!user){
     ui.push('<p>尚未登录。请先注册或登录。</p>');
     ui.push('<div class="row row-2"><a href="#/auth"><button>注册/登录</button></a><a href="#/stats"><button>统计</button></a></div>');
   } else {
     const bal = await getInitialBalance(user.id);
-    ui.push(`<p>当前用户：<b>${user.username}</b></p>`);
+    ui.push(`<p>当前账本：<b>${user.username}</b></p>`);
     if (bal == null){
       ui.push('<p>尚未设置初始总余额。</p>');
       ui.push('<form id="initForm" class="row row-2"><input type="number" step="0.01" placeholder="初始总余额"><button type="submit">保存</button></form>');

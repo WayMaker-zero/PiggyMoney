@@ -9,7 +9,8 @@ body { margin: 0; background: var(--bg); color: var(--fg); font-family: ui-sans-
 .page { display: grid; grid-template-columns: 1fr; min-height: 100vh; }
 @media (min-width: 768px){ .page { grid-template-columns: 250px 1fr; }}
 .sidebar { background: linear-gradient(180deg, var(--panel) 0%, var(--panel-soft) 100%); padding: calc(var(--space)*2) var(--space); box-shadow: var(--shadow); border-right: 1px solid var(--border); }
-.sidebar .brand { font-size: 1.25rem; margin: 0 0 var(--space) 0; letter-spacing: 0.3px; }
+.sidebar .brand { display: flex; align-items: center; gap: 10px; font-size: 1.2rem; margin: 0 0 var(--space) 0; letter-spacing: 0.3px; }
+.brand-icon { width: 36px; height: 36px; border-radius: 12px; box-shadow: 0 6px 16px rgba(58,96,255,0.25); object-fit: cover; }
 nav { display: grid; gap: 8px; }
 nav a { color: var(--accent); text-decoration: none; padding: 10px 12px; border-radius: 12px; background: rgba(0,0,0,0.03); border: 1px solid rgba(0,0,0,0.06); transition: background .2s, transform .05s; text-align: center; }
 nav a:hover { background: rgba(0,0,0,0.06); }
@@ -69,6 +70,7 @@ button:hover { filter: brightness(1.05); }
 .settings-card { display: grid; gap: 24px; }
 .settings-card h2 { margin: 0; }
 .settings-section { display: grid; gap: 12px; }
+.settings-field { display: grid; gap: 6px; }
 .settings-section h3 { margin: 0; font-size: 1.1rem; }
 .settings-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
 .settings-row > * { flex: 1 1 180px; min-width: 0; }
@@ -85,10 +87,16 @@ button:hover { filter: brightness(1.05); }
 .settings-footer { display: flex; justify-content: flex-end; }
 
 @media (max-width: 720px){
-  .settings-row { flex-direction: column; align-items: stretch; }
+  .settings-card { gap: 20px; }
+  .settings-section { gap: 16px; }
+  .settings-row { flex-direction: column; align-items: stretch; gap: 16px; }
   .settings-row > * { width: 100%; flex: 1 1 auto; }
-  .settings-switch { width: 100%; justify-content: space-between; }
+  .settings-switch { width: 100%; justify-content: flex-start; }
+  .settings-switch .switch-label { margin-left: 4px; }
   .settings-card .settings-cta,
   .settings-footer button { width: 100%; }
   .settings-footer { justify-content: stretch; }
+  .settings-file { flex-direction: column; align-items: stretch; gap: 10px; padding: 14px; }
+  .settings-file .file-name { text-align: left; }
+  .btn-secondary { width: 100%; }
 }
