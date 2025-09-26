@@ -172,7 +172,7 @@ async function overview(root){
   const user = await getCurrentUser();
   const ui = [];
   ui.push('<div class="card">');
-  ui.push('<h2>总览</h2>');
+  ui.push('<h2>用户</h2>');
   if (!user){
     ui.push('<p>尚未登录。请先注册或登录。</p>');
     ui.push('<div class="row row-2"><a href="#/auth"><button>注册/登录</button></a><a href="#/stats"><button>统计</button></a></div>');
@@ -272,13 +272,14 @@ async function stats(root){
   if (!user){ root.innerHTML = '<div class="card"><p>请先登录后查看统计。</p></div>'; return; }
   const range = lastMonthsRange(6);
   const list = await listTransactions({ userId: user.id, range });
+  const initialBalance = (await getInitialBalance(user.id)) ?? 0;
   const view = [];
   view.push('<div class="card">');
   view.push('<h2>统计</h2>');
   view.push('<div class="row row-2"><select id="kind"><option value="balance">余额</option><option value="income">收入</option><option value="expense">支出</option></select><select id="gran"><option value="month">按月</option><option value="week">按周</option></select></div>');
   view.push('<div class="chart" id="chart"></div>');
   view.push('<h3>最近记录</h3>');
-  view.push('<div class="row row-2"><input id="q" placeholder="搜索备注/标签"/><span class="muted">共 '+list.length+' 条</span></div>');
+  view.push('<div class="row row-2"><input id="q" placeholder="筛选备注/标签"/><span class="muted">共 '+list.length+' 条</span></div>');
   view.push('<div id="list"></div>');
   view.push('</div>');
   root.innerHTML = view.join('');
@@ -286,8 +287,8 @@ async function stats(root){
   function update(){
     const kind = root.querySelector('#kind').value;
     const gran = root.querySelector('#gran').value;
-    const data = aggregate(list, kind, gran);
-    renderLine(chartEl, { name: kind, data });
+    const data = aggregate(list, kind, gran, { initialBalance, range });
+    renderLine(chartEl, { name: kind, data, meta: { gran, kind } });
   }
   root.querySelector('#kind').addEventListener('change', update);
   root.querySelector('#gran').addEventListener('change', update);
@@ -310,56 +311,72 @@ async function settings(root){
   const disabled = user ? '' : 'disabled';
   const theme = getCurrentTheme();
   root.innerHTML = `
-    <div class="card">
+    <div class="card settings-card">
       <h2>设置</h2>
-      <h3>外观</h3>
-      <div class="toolbar">
-        <div class="tool">
-          <label class="muted">主题</label>
-          <select id="theme">
-            <option value="light" ${theme==='light'?'selected':''}>明亮</option>
-            <option value="dark" ${theme==='dark'?'selected':''}>深色</option>
-            <option value="system" ${theme==='system'?'selected':''}>跟随系统</option>
-          </select>
+      <section class="settings-section">
+        <h3>外观</h3>
+        <div class="settings-row">
+          <div class="settings-field">
+            <label class="muted" for="theme">主题</label>
+            <select id="theme">
+              <option value="light" ${theme==='light'?'selected':''}>明亮</option>
+              <option value="dark" ${theme==='dark'?'selected':''}>深色</option>
+              <option value="system" ${theme==='system'?'selected':''}>跟随系统</option>
+            </select>
+          </div>
         </div>
-      </div>
-      <h3>备份与迁移（JSON）</h3>
-      <div class="toolbar">
-        <div class="tool">
-          <label class="switch">
+      </section>
+      <section class="settings-section">
+        <h3>备份与迁移（JSON）</h3>
+        <div class="settings-row">
+          <label class="switch settings-switch">
             <input type="checkbox" id="encExport">
             <span class="slider"></span>
-            <span class="switch-label">导出加密</span>
+            <span class="switch-label">加密导出</span>
           </label>
-          <input id="exportPwd" placeholder="导出口令（可选）" type="password" />
-          <button class="btn btn-primary" id="btnExport" ${disabled}>导出 JSON</button>
+          <input id="exportPwd" placeholder="导出密码（可选）" type="password" />
+          <button class="btn btn-primary settings-cta" id="btnExport" ${disabled}>导出 JSON</button>
         </div>
-        <div class="tool">
-          <input id="importFile" type="file" accept=".json,.pmj" />
+        <div class="settings-row settings-row-import">
+          <div class="settings-file">
+            <input id="importFile" type="file" accept=".json,.pmj" />
+            <button type="button" class="btn-secondary" id="pickFile">选择文件</button>
+            <span class="file-name" id="fileName">未选择文件</span>
+          </div>
           <select id="strategy"><option value="overwrite">覆盖导入</option><option value="merge">合并导入</option></select>
-          <input id="importPwd" placeholder="导入口令（如为加密文件）" type="password" />
-          <button class="btn" id="btnImport">导入 JSON</button>
+          <input id="importPwd" placeholder="导入密码（如为加密文件）" type="password" />
+          <button class="btn settings-cta" id="btnImport">导入 JSON</button>
         </div>
+      </section>
+      <div class="settings-footer">
+        <button id="btnLogout" ${disabled}>登出</button>
       </div>
-      <div class="row"><button id="btnLogout" ${disabled}>登出</button></div>
     </div>`;
 
   // theme select
   const themeSel = root.querySelector('#theme');
   themeSel.addEventListener('change', (e)=>{ setTheme(e.target.value); });
 
+  const fileInput = root.querySelector('#importFile');
+  const fileName = root.querySelector('#fileName');
+  root.querySelector('#pickFile').addEventListener('click', ()=> fileInput.click());
+  fileInput.addEventListener('change', ()=>{
+    fileName.textContent = fileInput.files.length ? fileInput.files[0].name : '未选择文件';
+  });
+
+  root.querySelector('#btnImport').addEventListener('click', async ()=>{
+    const f = fileInput.files[0];
+    if (!f) return alert('请选择需要导入的文件');
+    const strategy = root.querySelector('#strategy').value;
+    const pwd = root.querySelector('#importPwd').value;
+    try { await importJson(f, { strategy, password: pwd }); alert('导入成功'); } catch(err){ alert(err.message || '导入失败'); }
+  });
+
   if (user){
     root.querySelector('#btnExport').addEventListener('click', async ()=>{
       const enc = root.querySelector('#encExport').checked;
       const pwd = root.querySelector('#exportPwd').value;
       await exportJson(user.id, { encrypted: enc && !!pwd, password: pwd });
-    });
-    root.querySelector('#btnImport').addEventListener('click', async ()=>{
-      const f = root.querySelector('#importFile').files[0];
-      if (!f) return alert('请选择文件');
-      const strategy = root.querySelector('#strategy').value;
-      const pwd = root.querySelector('#importPwd').value;
-      try { await importJson(f, { strategy, password: pwd }); alert('导入成功'); } catch(err){ alert(err.message || '导入失败'); }
     });
     root.querySelector('#btnLogout').addEventListener('click', async ()=>{ await logout(); render(); });
   }
@@ -369,48 +386,338 @@ function notfound(root){ root.innerHTML = '<div class="card"><h2>未找到页面
 
 // --- Helpers: chart & aggregate ---
 function renderLine(el, series){
+  if (!el) return;
+  const data = series.data || [];
   let canvas = el.querySelector('canvas');
-  if (!canvas){ canvas = document.createElement('canvas'); canvas.style.width='100%'; canvas.style.height='100%'; el.innerHTML=''; el.appendChild(canvas); }
-  const dpr = Math.min(window.devicePixelRatio||1, 2);
-  const rect = el.getBoundingClientRect(); const w=Math.max(320, rect.width); const h=Math.max(160, rect.height);
-  canvas.width = Math.floor(w*dpr); canvas.height = Math.floor(h*dpr);
-  const ctx = canvas.getContext('2d'); ctx.scale(dpr, dpr); ctx.clearRect(0,0,w,h);
-  const stats = calcSeriesStats(series.data);
-  drawAxesWithLabels(ctx, w, h, series.data, stats);
-  drawSeries(ctx, series.data, w, h, stats);
+  if (!canvas){
+    canvas = document.createElement('canvas');
+    canvas.className = 'chart-canvas';
+    canvas.style.width = '100%';
+    canvas.style.height = '100%';
+    el.innerHTML = '';
+    el.appendChild(canvas);
+  }
+  let tooltip = el.querySelector('.chart-tooltip');
+  if (!tooltip){
+    tooltip = document.createElement('div');
+    tooltip.className = 'chart-tooltip';
+    el.appendChild(tooltip);
+  }
+
+  const ctx = canvas.getContext('2d');
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const rect = el.getBoundingClientRect();
+  const w = Math.max(320, rect.width || 320);
+  const h = Math.max(220, rect.height || 220);
+  canvas.width = Math.floor(w * dpr);
+  canvas.height = Math.floor(h * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  if (!data.length){
+    ctx.fillStyle = 'rgba(223,232,255,0.75)';
+    ctx.font = '14px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('暂无数据', w / 2, h / 2);
+    tooltip.style.opacity = 0;
+    canvas.__hoverIndex = -1;
+    canvas.__points = [];
+    return;
+  }
+
+  const padding = { top: 30, right: 32, bottom: 48, left: 72 };
+  const plotW = w - padding.left - padding.right;
+  const plotH = h - padding.top - padding.bottom;
+  const stats = calcSeriesStats(data);
+  const points = buildChartPoints(data, padding, plotW, plotH, stats);
+  const palette = {
+    line: '#3a60ff',
+    areaTop: 'rgba(58,96,255,0.38)',
+    areaBottom: 'rgba(58,96,255,0.08)',
+    grid: 'rgba(255,255,255,0.08)',
+    axis: 'rgba(255,255,255,0.2)',
+    text: 'rgba(223,232,255,0.9)'
+  };
+
+  function paint(hoverIndex = canvas.__hoverIndex ?? -1){
+    ctx.clearRect(0, 0, w, h);
+    drawChartBackground(ctx, padding, w, h);
+    drawChartGrid(ctx, padding, plotW, plotH, stats, points, palette, series.meta);
+    drawChartSeries(ctx, points, padding, plotH, palette, hoverIndex);
+  }
+
+  canvas.__hoverIndex = canvas.__hoverIndex ?? -1;
+  canvas.__points = points;
+  canvas.__paint = paint;
+  canvas.__meta = series.meta || {};
+  canvas.__padding = padding;
+  canvas.__dimensions = { w, h, plotW, plotH };
+
+  paint(canvas.__hoverIndex);
+  bindChartEvents(canvas, tooltip);
 }
-function calcSeriesStats(data){ if(!data.length) return { ymin:0, ymax:1 }; const vals=data.map(p=>p.y); const min=Math.min(...vals); const max=Math.max(...vals); const pad=(max-min)*.1||1; return { ymin: min-pad, ymax: max+pad }; }
-function drawAxesWithLabels(ctx, w, h, data, st){ const L=40,R=w-10,T=10,B=h-30; ctx.strokeStyle='rgba(255,255,255,.15)'; ctx.lineWidth=1; // axes
-  ctx.beginPath(); ctx.moveTo(L,B); ctx.lineTo(R,B); ctx.stroke(); ctx.beginPath(); ctx.moveTo(L,T); ctx.lineTo(L,B); ctx.stroke();
-  ctx.fillStyle='rgba(223,232,255,.85)'; ctx.font='12px system-ui, -apple-system, Segoe UI, Roboto, Arial'; ctx.textAlign='right'; ctx.textBaseline='middle';
-  const yticks = 4; for(let i=0;i<=yticks;i++){ const t=i/yticks; const y=B - t*(B-T); const v = st.ymin + t*(st.ymax-st.ymin); ctx.fillText(formatMoney(v), L-6, y); ctx.beginPath(); ctx.strokeStyle='rgba(255,255,255,.06)'; ctx.moveTo(L,y); ctx.lineTo(R,y); ctx.stroke(); }
-  // x labels: first, mid, last
-  ctx.textAlign='center'; ctx.textBaseline='top'; const n=data.length; if(n){ const xs=[0, Math.floor((n-1)/2), n-1]; const step=(R-L)/Math.max(1,n-1); xs.forEach((i,idx)=>{ const x=L + i*step; const label=String(data[i].x); ctx.fillStyle='rgba(223,232,255,.85)'; ctx.fillText(label, x, B+6); }); }
+
+function calcSeriesStats(data){
+  if (!data.length) return { min: 0, max: 1 };
+  let min = Math.min(...data.map(p => p.y));
+  let max = Math.max(...data.map(p => p.y));
+  if (min === max){
+    const pad = Math.abs(min) * 0.1 || 1;
+    min -= pad;
+    max += pad;
+  } else {
+    const pad = (max - min) * 0.1;
+    min -= pad;
+    max += pad;
+  }
+  return { min, max };
 }
-function drawSeries(ctx, data, w, h, st){ if(!data.length) return; const { ymin, ymax } = st; const L=40,R=w-10,T=10,B=h-30; const step=(R-L)/Math.max(1,data.length-1); const grad=ctx.createLinearGradient(0,T,0,B); grad.addColorStop(0,'rgba(138,180,255,0.5)'); grad.addColorStop(1,'rgba(138,180,255,0.05)'); ctx.fillStyle=grad; const pts=[]; data.forEach((p,i)=>{ const x=L+i*step; const y=B-((p.y-ymin)/(ymax-ymin))*(B-T); pts.push([x,y]);}); ctx.beginPath(); pts.forEach(([x,y],i)=>{ if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);}); ctx.strokeStyle='#8ab4ff'; ctx.lineWidth=2; ctx.stroke(); ctx.lineTo(R,B); ctx.lineTo(L,B); ctx.closePath(); ctx.globalAlpha=0.7; ctx.fill(); ctx.globalAlpha=1; }
+
+function buildChartPoints(data, padding, plotW, plotH, stats){
+  if (!data.length) return [];
+  const left = padding.left;
+  const bottom = padding.top + plotH;
+  const range = stats.max - stats.min || 1;
+  const step = data.length > 1 ? plotW / (data.length - 1) : 0;
+  return data.map((p, idx) => {
+    const x = left + step * idx;
+    const ratio = (p.y - stats.min) / range;
+    const y = bottom - ratio * plotH;
+    return { x, y, value: p.y, label: p.x };
+  });
+}
+
+function drawChartBackground(ctx, padding, w, h){
+  const gradient = ctx.createLinearGradient(0, padding.top, 0, h - padding.bottom / 2);
+  gradient.addColorStop(0, 'rgba(58,96,255,0.08)');
+  gradient.addColorStop(1, 'rgba(58,96,255,0.01)');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(padding.left, padding.top, w - padding.left - padding.right, h - padding.top - padding.bottom);
+}
+
+function drawChartGrid(ctx, padding, plotW, plotH, stats, points, palette, meta){
+  const left = padding.left;
+  const right = padding.left + plotW;
+  const top = padding.top;
+  const bottom = padding.top + plotH;
+
+  ctx.lineWidth = 1;
+  ctx.font = '12px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+  ctx.fillStyle = palette.text;
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'right';
+
+  const yticks = 4;
+  for (let i = 0; i <= yticks; i++){
+    const t = i / yticks;
+    const y = bottom - plotH * t;
+    const value = stats.min + (stats.max - stats.min) * t;
+    ctx.strokeStyle = i === 0 ? palette.axis : palette.grid;
+    ctx.beginPath();
+    ctx.moveTo(left, Math.round(y) + 0.5);
+    ctx.lineTo(right, Math.round(y) + 0.5);
+    ctx.stroke();
+    ctx.fillStyle = palette.text;
+    ctx.fillText(formatAxisValue(value), left - 12, y);
+  }
+
+  ctx.strokeStyle = palette.axis;
+  ctx.beginPath();
+  ctx.moveTo(left, top);
+  ctx.lineTo(left, bottom);
+  ctx.stroke();
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  const count = points.length;
+  const maxLabels = Math.min(count, 6);
+  const step = Math.max(1, Math.round(count / maxLabels));
+  for (let i = 0; i < count; i += step){
+    const point = points[i];
+    ctx.fillText(formatXAxis(point.label, meta), point.x, bottom + 8);
+  }
+  if ((count - 1) % step !== 0){
+    const last = points[count - 1];
+    ctx.fillText(formatXAxis(last.label, meta), last.x, bottom + 8);
+  }
+}
+
+function drawChartSeries(ctx, points, padding, plotH, palette, hoverIndex){
+  if (!points.length) return;
+  const top = padding.top;
+  const bottom = padding.top + plotH;
+  const gradient = ctx.createLinearGradient(0, top, 0, bottom);
+  gradient.addColorStop(0, palette.areaTop);
+  gradient.addColorStop(1, palette.areaBottom);
+
+  ctx.beginPath();
+  points.forEach((pt, idx) => { idx === 0 ? ctx.moveTo(pt.x, pt.y) : ctx.lineTo(pt.x, pt.y); });
+  ctx.lineTo(points[points.length - 1].x, bottom);
+  ctx.lineTo(points[0].x, bottom);
+  ctx.closePath();
+  ctx.fillStyle = gradient;
+  ctx.fill();
+
+  ctx.beginPath();
+  points.forEach((pt, idx) => { idx === 0 ? ctx.moveTo(pt.x, pt.y) : ctx.lineTo(pt.x, pt.y); });
+  ctx.strokeStyle = palette.line;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  if (hoverIndex >= 0 && points[hoverIndex]){
+    const p = points[hoverIndex];
+    ctx.save();
+    ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = 'rgba(58,96,255,0.35)';
+    ctx.beginPath();
+    ctx.moveTo(p.x, top);
+    ctx.lineTo(p.x, bottom);
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+    ctx.fillStyle = '#fff';
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = palette.line;
+    ctx.stroke();
+  }
+}
+
+function bindChartEvents(canvas, tooltip){
+  if (canvas.__eventsBound) return;
+  canvas.__eventsBound = true;
+
+  const handlePointerMove = (event) => {
+    const points = canvas.__points || [];
+    if (!points.length) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    let nearest = -1;
+    let minDist = Infinity;
+    points.forEach((pt, idx) => {
+      const dist = Math.abs(pt.x - x);
+      if (dist < minDist){
+        minDist = dist;
+        nearest = idx;
+      }
+    });
+    if (nearest < 0) return;
+    if (canvas.__hoverIndex !== nearest){
+      canvas.__hoverIndex = nearest;
+      canvas.__paint(nearest);
+    }
+    const point = points[nearest];
+    tooltip.innerHTML = `<div class="tooltip-label">${formatTooltipLabel(point.label, canvas.__meta)}</div><div class="tooltip-value">${formatMoneyDetailed(point.value)}</div>`;
+    tooltip.style.left = `${point.x}px`;
+    tooltip.style.top = `${point.y}px`;
+    tooltip.style.opacity = 1;
+  };
+
+  const hideTooltip = () => {
+    canvas.__hoverIndex = -1;
+    canvas.__paint(-1);
+    tooltip.style.opacity = 0;
+  };
+
+  canvas.addEventListener('pointermove', handlePointerMove);
+  canvas.addEventListener('pointerleave', hideTooltip);
+  canvas.addEventListener('pointerdown', handlePointerMove);
+  canvas.addEventListener('pointerup', handlePointerMove);
+  canvas.addEventListener('pointercancel', hideTooltip);
+}
+
+function formatAxisValue(value){
+  const abs = Math.abs(value);
+  const sign = value < 0 ? '-' : '';
+  if (abs >= 1e8) return `${sign}¥${(abs / 1e8).toFixed(1)}亿`;
+  if (abs >= 1e4) return `${sign}¥${(abs / 1e4).toFixed(1)}万`;
+  if (abs >= 1) return `${sign}¥${abs.toFixed(0)}`;
+  return `${sign}¥${abs.toFixed(2)}`;
+}
+
+function formatXAxis(label, meta){
+  if (!label) return '';
+  const gran = meta?.gran;
+  if (gran === 'week'){
+    const [year, week] = label.split('-W');
+    if (year && week) return `${year} 第${parseInt(week, 10)}周`;
+  }
+  if (gran === 'month'){
+    const [year, month] = label.split('-');
+    if (year && month) return `${year}-${month}`;
+  }
+  return label;
+}
+
+function formatTooltipLabel(label, meta){
+  if (!label) return '';
+  const gran = meta?.gran;
+  if (gran === 'week'){
+    const [year, week] = label.split('-W');
+    if (year && week) return `${year}年第${parseInt(week, 10)}周`;
+  }
+  if (gran === 'month'){
+    const [year, month] = label.split('-');
+    if (year && month) return `${year}年${month}月`;
+  }
+  return label;
+}
 function lastMonthsRange(n){ const now=new Date(); const end=now.toISOString().slice(0,10); const startDate= new Date(now); startDate.setMonth(now.getMonth()-n+1); const start=startDate.toISOString().slice(0,10); return { start, end }; }
 function isoWeekKey(iso){ const d=new Date(iso+'T00:00:00Z'); const yStart=new Date(Date.UTC(d.getUTCFullYear(),0,1)); const day=(d.getUTCDay()+6)%7; const diff=(d.getTime()-yStart.getTime())/86400000+1; const week=Math.ceil((diff-day)/7); return `${d.getUTCFullYear()}-W${String(week).padStart(2,'0')}`; }
 function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c])); }
-function aggregate(items, kind, gran){ const sorted=[...items].sort((a,b)=>a.date.localeCompare(b.date)); const map=new Map(); for(const t of sorted){ const key = gran==='week'? isoWeekKey(t.date): t.date.slice(0,7); const delta = t.type==='income'? t.amount: -t.amount; if(kind==='income'&&t.type!=='income') continue; if(kind==='expense'&&t.type!=='expense') continue; const v = kind==='balance'? delta: Math.abs(delta); map.set(key,(map.get(key)||0)+v);} const out=[...map.entries()].sort((a,b)=>a[0].localeCompare(b[0])).map(([x,y])=>({x,y})); if(kind==='balance'){ let acc=0; for(const p of out){ acc+=p.y; p.y=acc; } } return out; }
-function formatMoney(v){ const abs=Math.abs(v); const sign=v<0?'-':''; if(abs>=1e8) return sign+(abs/1e8).toFixed(1)+'亿'; if(abs>=1e4) return sign+(abs/1e4).toFixed(1)+'万'; return sign+abs.toFixed(0); }
+function aggregate(items, kind, gran, opts = {}){
+  const { initialBalance = null } = opts;
+  const sorted = [...items].sort((a, b) => a.date.localeCompare(b.date));
+  const map = new Map();
+  for (const t of sorted){
+    const key = gran === 'week' ? isoWeekKey(t.date) : t.date.slice(0, 7);
+    if (kind === 'income' && t.type !== 'income') continue;
+    if (kind === 'expense' && t.type !== 'expense') continue;
+    const value = kind === 'balance' ? (t.type === 'income' ? t.amount : -t.amount) : t.amount;
+    map.set(key, (map.get(key) || 0) + value);
+  }
+  const ordered = [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  if (kind === 'balance'){
+    const hasInitial = initialBalance != null;
+    let acc = hasInitial ? initialBalance : 0;
+    const out = [];
+    if (hasInitial) out.push({ x: '起始余额', y: acc });
+    for (const [key, delta] of ordered){
+      acc += delta;
+      out.push({ x: key, y: acc });
+    }
+    if (!out.length && hasInitial) return [{ x: '起始余额', y: initialBalance }];
+    return out;
+  }
+  return ordered.map(([key, total]) => ({ x: key, y: total }));
+}
+
+function formatMoneyDetailed(value){
+  const sign = value < 0 ? '-' : '';
+  const abs = Math.abs(value);
+  return `${sign}¥${abs.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
 
 // --- Search Page ---
 async function search(root){
   const user = await getCurrentUser();
-  if (!user){ root.innerHTML = '<div class="card"><p>请先登录后进行搜索。</p></div>'; return; }
+  if (!user){ root.innerHTML = '<div class="card"><p>请先登录后管理账单。</p></div>'; return; }
   const today = new Date().toISOString().slice(0,10);
   const start30 = (()=>{ const d=new Date(); d.setDate(d.getDate()-30); return d.toISOString().slice(0,10); })();
   root.innerHTML = `
     <div class="card">
-      <h2>搜索条目</h2>
+      <h2>账单</h2>
       <div class="row row-2">
-        <input id="kw" placeholder="关键词：备注或标签" />
+        <input id="kw" placeholder="搜索备注或标签" />
         <div class="row row-2">
           <input id="start" type="date" value="${start30}" />
           <input id="end" type="date" value="${today}" />
         </div>
       </div>
-      <div class="row"><button id="btnSearch">搜索</button></div>
+      <div class="row"><button id="btnSearch">筛选</button></div>
       <div id="result"></div>
     </div>`;
   root.querySelector('#btnSearch').addEventListener('click', runSearch);
